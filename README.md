@@ -93,6 +93,35 @@ By default, sift logs to its panel and keeps `vim.notify()` quiet. Set `logging.
 - `:SiftAcceptAll`
 - `:SiftRejectAll`
 
+## Suggested Keymaps
+
+`sift.nvim` does not define global keymaps by default. That is intentional: many Neovim setups already use `<leader>s` for search or substitute workflows.
+
+If you want a Zed-like review flow, this is a good starting point:
+
+```lua
+vim.keymap.set("n", "<leader>ss", "<cmd>SiftStart<cr>", { desc = "Sift start" })
+vim.keymap.set("n", "<leader>sx", "<cmd>SiftStop<cr>", { desc = "Sift stop" })
+vim.keymap.set("n", "<leader>sp", "<cmd>SiftPrompt<cr>", { desc = "Sift prompt" })
+vim.keymap.set("n", "<leader>st", "<cmd>SiftPanelToggle<cr>", { desc = "Sift panel" })
+vim.keymap.set("n", "<leader>sr", "<cmd>SiftRefresh<cr>", { desc = "Sift refresh" })
+
+vim.keymap.set("n", "]s", "<cmd>SiftNextHunk<cr>", { desc = "Sift next hunk" })
+vim.keymap.set("n", "[s", "<cmd>SiftPrevHunk<cr>", { desc = "Sift prev hunk" })
+
+vim.keymap.set("n", "<leader>sa", "<cmd>SiftAcceptHunk<cr>", { desc = "Sift accept hunk" })
+vim.keymap.set("n", "<leader>sd", "<cmd>SiftRejectHunk<cr>", { desc = "Sift reject hunk" })
+vim.keymap.set("n", "<leader>sA", "<cmd>SiftAcceptFile<cr>", { desc = "Sift accept file" })
+vim.keymap.set("n", "<leader>sD", "<cmd>SiftRejectFile<cr>", { desc = "Sift reject file" })
+vim.keymap.set("n", "<leader>s<CR>", "<cmd>SiftAcceptAll<cr>", { desc = "Sift accept all" })
+vim.keymap.set("n", "<leader>s-", "<cmd>SiftRejectAll<cr>", { desc = "Sift reject all" })
+```
+
+Inside the sift panel:
+
+- `q` closes the panel
+- `<CR>` opens `:SiftPrompt`
+
 ## Workflow
 
 1. Open a tracked file inside a git repository.
