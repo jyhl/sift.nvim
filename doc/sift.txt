@@ -1,0 +1,142 @@
+*sift.txt*    sift.nvim
+
+==============================================================================
+CONTENTS                                                 *sift-contents*
+
+1. Introduction .............................................. |sift-intro|
+2. Commands ................................................. |sift-commands|
+3. Configuration ............................................. |sift-config|
+
+==============================================================================
+INTRODUCTION                                               *sift-intro*
+
+sift.nvim provides a Codex-backed agent session inside Neovim.
+
+Core behavior:
+
+  - session bootstrap against a git repository
+  - a session baseline ref created under `refs/sift/`
+  - a scratch panel for prompts and backend status
+  - a nonblocking `codex exec --json` wrapper
+  - baseline diff scanning into pending review hunks
+  - inline pending hunk rendering and refresh/navigation commands
+  - accept/reject actions at hunk, file, and session scope
+
+Start a session with: >
+  :SiftStart
+<
+Send a prompt with: >
+  :SiftPrompt
+<
+
+==============================================================================
+COMMANDS                                                 *sift-commands*
+
+                                                        *:SiftStart*
+:SiftStart
+  Start a sift session for the current repository and create a baseline ref.
+
+                                                        *:SiftStop*
+:SiftStop
+  Stop the active session for the current repository and delete its baseline
+  ref.
+
+                                                       *:SiftPrompt*
+:SiftPrompt [text]
+  Send a prompt to Codex. With no argument, sift.nvim opens an input prompt.
+
+                                                  *:SiftPanelToggle*
+:SiftPanelToggle
+  Toggle the session panel for the current repository.
+
+                                                   *:SiftAcceptHunk*
+:SiftAcceptHunk
+  Accept the pending hunk under the cursor. The current text stays in the
+  workspace and the hunk is removed from sift's pending-review state.
+
+                                                   *:SiftRejectHunk*
+:SiftRejectHunk
+  Reject the pending hunk under the cursor by restoring baseline-equivalent
+  text for that hunk region.
+
+                                                   *:SiftAcceptFile*
+:SiftAcceptFile
+  Accept all pending hunks in the current file.
+
+                                                   *:SiftRejectFile*
+:SiftRejectFile
+  Reject all pending hunks in the current file by restoring the file from the
+  session baseline ref.
+
+                                                    *:SiftAcceptAll*
+:SiftAcceptAll
+  Accept all pending hunks in the current session.
+
+                                                    *:SiftRejectAll*
+:SiftRejectAll
+  Reject all pending files in the current session by restoring them from the
+  session baseline ref.
+
+                                                     *:SiftNextHunk*
+:SiftNextHunk
+  Jump to the next pending hunk in the active sift session.
+
+                                                     *:SiftPrevHunk*
+:SiftPrevHunk
+  Jump to the previous pending hunk in the active sift session.
+
+                                                      *:SiftRefresh*
+:SiftRefresh
+  Recompute pending hunks against the session baseline ref.
+
+==============================================================================
+CONFIGURATION                                              *sift-config*
+
+Example: >
+  lua require('sift').setup({
+    codex = {
+      sandbox = 'workspace-write',
+    },
+  })
+<
+
+Default options: >
+  {
+    codex = {
+      bin = 'codex',
+      sandbox = 'workspace-write',
+      model = nil,
+      profile = nil,
+      extra_args = {},
+      config_overrides = {
+        model_reasoning_effort = 'medium',
+      },
+    },
+    panel = {
+      height = 12,
+    },
+    logging = {
+      notify = false,
+      level = vim.log.levels.INFO,
+    },
+  }
+<
+
+Workflow: >
+  :SiftStart
+  :SiftPrompt
+  :SiftNextHunk
+  :SiftAcceptHunk
+<
+
+Notes: >
+  gitsigns.nvim is recommended, but optional.
+  Without gitsigns.nvim, sift still tracks pending review state and renders
+  plugin-owned signs/highlights, but inline diff preview integration is
+  disabled.
+  Accept keeps the current file text and clears sift's pending-review state.
+  Reject restores from the session baseline.
+  MVP support is limited to tracked files.
+<
+
+vim:tw=78:ts=8:noet:ft=help:norl:
