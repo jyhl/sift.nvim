@@ -24,15 +24,32 @@ Example with `lazy.nvim`:
 
 ```lua
 {
-  dir = "~/code/sift.nvim",
-  dependencies = { "lewis6991/gitsigns.nvim" },
+  "jyhl/sift.nvim",
+  dependencies = {
+    "lewis6991/gitsigns.nvim", -- optional, but recommended
+  },
+  cmd = {
+    "SiftStart",
+    "SiftStop",
+    "SiftPrompt",
+    "SiftPanelToggle",
+    "SiftAcceptHunk",
+    "SiftRejectHunk",
+    "SiftAcceptFile",
+    "SiftRejectFile",
+    "SiftAcceptAll",
+    "SiftRejectAll",
+    "SiftNextHunk",
+    "SiftPrevHunk",
+    "SiftRefresh",
+  },
   config = function()
     require("sift").setup()
   end,
 }
 ```
 
-`gitsigns.nvim` is optional. Without it, sift keeps working, but custom-base diff preview integration is disabled.
+`gitsigns.nvim` is optional. Without it, sift keeps working, but custom-base diff preview integration is disabled. Command-based lazy loading via `cmd = { ... }` works well for sift.
 
 ## Setup
 
