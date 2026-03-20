@@ -4,11 +4,14 @@ describe('sift.nvim', function()
   local diff = require('sift.diff')
   local fs = require('sift.fs')
   local git = require('sift.git')
+  local hunk_util = require('sift.diff.hunk')
+  local prompt = require('sift.prompt')
   local review = require('sift.review')
   local reject = require('sift.review.reject')
   local session_module = require('sift.session')
   local state = require('sift.state')
   local tracker = require('sift.review.tracker')
+  local ui_panel = require('sift.ui.panel')
   local unpack_fn = table.unpack or unpack
 
   local fixture_root = vim.fs.normalize(debug.getinfo(1, 'S').source:sub(2):match('(.+)/') .. 'fixtures/sample-repo')
@@ -150,6 +153,14 @@ describe('sift.nvim', function()
     return vim.fn.readfile(path)
   end
 
+  local function panel_hunk_label(hunk)
+    local anchor = hunk_util.anchor(hunk)
+    local finish = hunk_util.finish(hunk)
+    local location = anchor == finish and ('line ' .. anchor) or string.format('lines %d-%d', anchor, finish)
+    local detail = hunk.context ~= '' and hunk.context or (hunk.type or 'change')
+    return string.format('    %s  %s', location, detail)
+  end
+
   local current_session = nil
   local current_tmpdir = nil
   local original_cwd = nil
@@ -287,6 +298,24 @@ describe('sift.nvim', function()
     assert.is_false(ref_exists(tmpdir, started.baseline_ref))
   end)
 
+  it('opens a right-side panel and starts a session when toggled without one', function()
+    local tmpdir = create_workspace()
+    current_tmpdir = tmpdir
+
+    vim.cmd('edit ' .. vim.fn.fnameescape(tmpdir .. '/notes.txt'))
+
+    local err, started = await(function(done)
+      session_module.toggle_panel(done)
+    end)
+
+    assert.is_nil(err)
+    current_session = started
+    assert.are.equal(fs.realpath(tmpdir), started.repo_root)
+    assert.are.equal('sift://panel/' .. started.id, vim.api.nvim_buf_get_name(0))
+    assert.are.equal(config.get().panel.width, vim.api.nvim_win_get_width(0))
+    assert.is_not_nil(started.baseline_ref)
+  end)
+
   it('uses a dirty tracked file as the session baseline when starting', function()
     local tmpdir = create_workspace()
     current_tmpdir = tmpdir
@@ -341,6 +370,144 @@ describe('sift.nvim', function()
     assert.are.equal(1, review_state.counts.files)
     assert.are.equal(1, review_state.counts.hunks)
     assert.are.equal('notes.txt', review_state.hunk_list[1].path)
+  end)
+
+  it('resolves and completes @file references against tracked repo files', function()
+    local session, tmpdir = create_repo()
+    current_session = session
+    current_tmpdir = tmpdir
+
+    local matches, err = prompt.complete_paths(session, 'not')
+
+    assert.is_nil(err)
+    assert.is_true(vim.tbl_contains(matches, 'notes.txt'))
+
+    local path, resolve_err = prompt.resolve_reference(session, 'notes.txt')
+
+    assert.is_nil(resolve_err)
+    assert.are.equal('notes.txt', path)
+
+    local expanded, referenced, expand_err = prompt.expand(session, 'review @notes.txt')
+
+    assert.is_nil(expand_err)
+    assert.are.same({ 'notes.txt' }, referenced)
+    assert.matches('Referenced project files:', expanded, 1, true)
+    assert.matches('--- FILE: notes.txt ---', expanded, 1, true)
+    assert.matches('line 1', expanded, 1, true)
+  end)
+
+  it('round-trips multi-line panel prompt text through render', function()
+    local session, tmpdir = create_repo()
+    current_session = session
+    current_tmpdir = tmpdir
+
+    ui_panel.open(session, { focus_prompt = false })
+    ui_panel.set_prompt(session, 'first line\nsecond line')
+
+    assert.are.equal('first line\nsecond line', ui_panel.get_prompt(session))
+  end)
+
+  it('toggles and jumps referenced files from the panel transcript', function()
+    local session, tmpdir = create_repo()
+    current_session = session
+    current_tmpdir = tmpdir
+
+    local notes = tmpdir .. '/notes.txt'
+
+    vim.cmd('edit ' .. vim.fn.fnameescape(notes))
+    ui_panel.open(session, { focus_prompt = false })
+    ui_panel.append_entry(session, 'user', 'review @notes.txt')
+    ui_panel.append_references(session, { 'notes.txt' }, '--- FILE: notes.txt ---\nline 1')
+
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    local ref_lnum = nil
+
+    for index, line in ipairs(lines) do
+      if line:find('references: 1 file', 1, true) then
+        ref_lnum = index
+        break
+      end
+    end
+
+    assert.is_not_nil(ref_lnum)
+    vim.api.nvim_win_set_cursor(0, { ref_lnum, 0 })
+    ui_panel.toggle_at_cursor(session)
+
+    lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    local file_lnum = nil
+
+    for index, line in ipairs(lines) do
+      if line == '    @notes.txt' then
+        file_lnum = index
+        break
+      end
+    end
+
+    assert.is_not_nil(file_lnum)
+    vim.api.nvim_win_set_cursor(0, { file_lnum, 0 })
+    assert.is_true(ui_panel.jump_at_cursor(session))
+    assert.are.equal(fs.realpath(notes), fs.realpath(vim.api.nvim_buf_get_name(0)))
+  end)
+
+  it('renders pending review entries in the panel and jumps to files and hunks from them', function()
+    local session, tmpdir = create_repo()
+    current_session = session
+    current_tmpdir = tmpdir
+
+    local notes = tmpdir .. '/notes.txt'
+    local other = tmpdir .. '/other.txt'
+
+    write_lines(notes, {
+      'line 1',
+      'LINE 2',
+      'line 3',
+      'line 4',
+      'line 5',
+      'line 6',
+      'line 7',
+      'line 8',
+      'line 9',
+      'line 10',
+      'LINE 11',
+      'line 12',
+    })
+    write_lines(other, {
+      'alpha',
+      'BETA',
+      'gamma',
+      'delta',
+    })
+
+    refresh(session)
+
+    vim.cmd('edit ' .. vim.fn.fnameescape(notes))
+    ui_panel.open(session, { focus_prompt = false })
+
+    local target_hunk = tracker.file_hunks(session, 'notes.txt')[2]
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    local other_lnum = nil
+    local notes_hunk_lnum = nil
+
+    for index, line in ipairs(lines) do
+      if line == '  other.txt (1 hunk)' then
+        other_lnum = index
+      elseif line == panel_hunk_label(target_hunk) then
+        notes_hunk_lnum = index
+      end
+    end
+
+    assert.is_not_nil(other_lnum)
+    assert.is_not_nil(notes_hunk_lnum)
+
+    vim.api.nvim_win_set_cursor(0, { other_lnum, 0 })
+    assert.is_true(ui_panel.jump_at_cursor(session))
+    assert.are.equal(fs.realpath(other), fs.realpath(vim.api.nvim_buf_get_name(0)))
+
+    vim.api.nvim_set_current_win(session.panel.winid)
+    vim.api.nvim_win_set_cursor(0, { notes_hunk_lnum, 0 })
+    assert.is_true(ui_panel.jump_at_cursor(session))
+    assert.are.equal(fs.realpath(notes), fs.realpath(vim.api.nvim_buf_get_name(0)))
+    assert.are.equal(hunk_util.anchor(target_hunk), vim.api.nvim_win_get_cursor(0)[1])
   end)
 
   it('accepts a hunk without changing workspace text', function()
@@ -923,6 +1090,50 @@ describe('sift.nvim', function()
 
     assert.is_true(vim.tbl_contains(transcript_texts, 'Codex run completed'))
     assert.is_true(vim.tbl_contains(transcript_texts, 'not-json output from codex'))
+    assert.is_true(vim.tbl_contains(transcript_texts, 'pending files after this run: notes.txt'))
+  end)
+
+  it('submits panel prompts and expands @file references before calling Codex', function()
+    local session, tmpdir = create_repo()
+    current_session = session
+    current_tmpdir = tmpdir
+
+    local captured_prompt = nil
+    local old_start = backend.start
+
+    backend.start = function(_, prompt_text, handlers)
+      captured_prompt = prompt_text
+
+      vim.schedule(function()
+        handlers.on_exit(0)
+      end)
+
+      return 91
+    end
+
+    vim.cmd('enew')
+    vim.cmd('cd ' .. vim.fn.fnameescape(tmpdir))
+
+    local err = await(function(done)
+      session_module.focus_prompt(function(focus_err)
+        assert.is_nil(focus_err)
+
+        session.submit_prompt = function(text)
+          session_module.prompt(text, function(prompt_err)
+            done(prompt_err)
+          end)
+        end
+
+        ui_panel.set_prompt(session, 'review @notes.txt')
+        ui_panel.submit_prompt(session)
+      end)
+    end)
+
+    backend.start = old_start
+
+    assert.is_nil(err)
+    assert.matches('Referenced project files:', captured_prompt, 1, true)
+    assert.matches('--- FILE: notes.txt ---', captured_prompt, 1, true)
   end)
 
   it('treats malformed Codex stdout lines as plain backend output', function()

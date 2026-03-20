@@ -3,6 +3,8 @@
 `sift.nvim` is a Neovim plugin for a Codex-driven agent workflow with:
 
 - a session panel for prompts and backend logs
+- a right-side panel-first workflow for prompting and review
+- a multi-line panel composer with project-file references
 - `codex exec --json` as the backend
 - a git baseline ref at `refs/sift/<session-id>`
 - plugin-owned review state
@@ -66,7 +68,10 @@ require("sift").setup({
     },
   },
   panel = {
+    auto_start = true,
     height = 12,
+    position = "right",
+    width = 50,
   },
   logging = {
     notify = false,
@@ -76,6 +81,8 @@ require("sift").setup({
 ```
 
 By default, sift logs to its panel and keeps `vim.notify()` quiet. Set `logging.notify = true` if you want notifications for warnings and errors.
+
+The panel opens in a right-side vertical split by default. `:SiftPanelToggle` opens the panel and starts a session automatically when `panel.auto_start = true`.
 
 ## Commands
 
@@ -120,19 +127,32 @@ vim.keymap.set("n", "<leader>s-", "<cmd>SiftRejectAll<cr>", { desc = "Sift rejec
 Inside the sift panel:
 
 - `q` closes the panel
-- `<CR>` opens `:SiftPrompt`
+- `<CR>` sends the current prompt, or opens the pending file / pending hunk / referenced file under the cursor
+- `<S-CR>` adds a new line to the prompt composer
+- `<C-j>` is kept as a fallback when the terminal does not send a distinct `Shift+Enter`
+- `<Tab>` completes `@file` references
+- `za` toggles referenced-file payloads in the transcript
+- `gf` opens the pending file / pending hunk / referenced file under the cursor
+- `]s` / `[s` jump to the next or previous pending hunk
+- `gr` refreshes review state
+- `gA` accepts all pending changes
+- `gR` rejects all pending changes
 
 ## Workflow
 
 1. Open a tracked file inside a git repository.
-2. Run `:SiftStart` to create the session baseline ref.
-3. Run `:SiftPrompt` to send a prompt to Codex.
-4. Review pending hunks with `:SiftNextHunk` and `:SiftPrevHunk`.
-5. Run `:SiftRefresh` if you want to force a rescan against the session baseline.
-6. Keep changes with `:SiftAcceptHunk`, `:SiftAcceptFile`, or `:SiftAcceptAll`.
-7. Restore from the baseline with `:SiftRejectHunk`, `:SiftRejectFile`, or `:SiftRejectAll`.
+2. Open the panel with `:SiftPanelToggle` or a keymap like `<leader>st`.
+3. If no session is active, sift starts one automatically and creates the session baseline ref.
+4. Type a prompt in the panel. Use `<S-CR>` for a new line and `<CR>` to send it to Codex.
+5. Use `@path/to/file.lua` in the panel prompt to reference tracked project files. Press `<Tab>` to complete `@file` references.
+6. Review pending hunks with `:SiftNextHunk` and `:SiftPrevHunk`.
+7. Run `:SiftRefresh` if you want to force a rescan against the session baseline.
+8. Keep changes with `:SiftAcceptHunk`, `:SiftAcceptFile`, or `:SiftAcceptAll`.
+9. Restore from the baseline with `:SiftRejectHunk`, `:SiftRejectFile`, or `:SiftRejectAll`.
 
 `Accept` keeps the current workspace text and removes the change from sift's pending-review UI. `Reject` restores text from the session baseline and then refreshes the review state.
+
+The panel also shows a live activity line while Codex is starting, working, streaming output, and refreshing review state after a run. Runs are grouped in the transcript, referenced-file payloads are collapsed by default, and the panel includes a pending-review section that lets you jump directly to changed files and hunks while keeping the panel pinned on the right. The panel also shows a short "pending files after this run" summary after each completed Codex turn.
 
 ## MVP limits
 

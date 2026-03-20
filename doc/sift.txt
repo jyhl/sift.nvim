@@ -15,6 +15,8 @@ sift.nvim provides a Codex-backed agent session inside Neovim.
 Core behavior:
 
   - session bootstrap against a git repository
+  - a right-side panel-first workflow for prompting and review
+  - a multi-line prompt composer inside the panel
   - a session baseline ref created under `refs/sift/`
   - a scratch panel for prompts and backend status
   - a nonblocking `codex exec --json` wrapper
@@ -23,10 +25,10 @@ Core behavior:
   - accept/reject actions at hunk, file, and session scope
 
 Start a session with: >
-  :SiftStart
+  :SiftPanelToggle
 <
-Send a prompt with: >
-  :SiftPrompt
+Send a prompt from the panel with: >
+  <CR>
 <
 
 ==============================================================================
@@ -43,11 +45,13 @@ COMMANDS                                                 *sift-commands*
 
                                                        *:SiftPrompt*
 :SiftPrompt [text]
-  Send a prompt to Codex. With no argument, sift.nvim opens an input prompt.
+  Send a prompt to Codex. With no argument, sift.nvim focuses the panel
+  prompt.
 
                                                   *:SiftPanelToggle*
 :SiftPanelToggle
-  Toggle the session panel for the current repository.
+  Toggle the session panel for the current repository. By default this also
+  starts a session automatically when one is not active yet.
 
                                                    *:SiftAcceptHunk*
 :SiftAcceptHunk
@@ -113,7 +117,10 @@ Default options: >
       },
     },
     panel = {
+      auto_start = true,
       height = 12,
+      position = 'right',
+      width = 50,
     },
     logging = {
       notify = false,
@@ -123,13 +130,29 @@ Default options: >
 <
 
 Workflow: >
-  :SiftStart
-  :SiftPrompt
+  :SiftPanelToggle
+  type a prompt in the panel
+  press <CR>
   :SiftNextHunk
   :SiftAcceptHunk
 <
 
 Notes: >
+  The panel opens in a right-side split by default.
+  Use <S-CR> in the panel to add a new prompt line.
+  <C-j> is kept as a fallback when the terminal does not send Shift+Enter
+  distinctly to Neovim.
+  Use @path/to/file.lua in the panel prompt to reference tracked files.
+  Press <Tab> in the panel prompt to complete @file references.
+  Use za on a references line to expand or collapse the payload sent to Codex.
+  Use <CR> or gf on a pending file, pending hunk, or referenced file line to
+  jump to it from the panel.
+  The panel includes a pending-review section so review can stay split-pane,
+  with the panel on the right and source files on the left.
+  Use ]s and [s in the panel to jump between pending hunks.
+  Use gr to refresh, gA to accept all, and gR to reject all.
+  The panel shows a live activity line while Codex is working and while sift
+  is refreshing review state.
   gitsigns.nvim is recommended, but optional.
   Without gitsigns.nvim, sift still tracks pending review state and renders
   plugin-owned signs/highlights, but inline diff preview integration is

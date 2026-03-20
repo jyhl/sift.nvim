@@ -12,7 +12,10 @@ local defaults = {
     },
   },
   panel = {
+    auto_start = true,
     height = 12,
+    position = 'right',
+    width = 50,
   },
   logging = {
     notify = false,

@@ -187,6 +187,41 @@ function M.diff_against(repo_root, base_ref, callback)
   end)
 end
 
+function M.tracked_files(repo_root, callback)
+  M.run(repo_root, { 'ls-files' }, function(err, result)
+    if err then
+      callback(err)
+      return
+    end
+
+    if result.code ~= 0 then
+      callback(util.trim(result.stderr_text) ~= '' and util.trim(result.stderr_text) or 'git ls-files failed')
+      return
+    end
+
+    callback(nil, result.stdout)
+  end)
+end
+
+function M.tracked_files_sync(repo_root)
+  local output = vim.fn.system({
+    'git',
+    '-C',
+    repo_root,
+    'ls-files',
+  })
+
+  if vim.v.shell_error ~= 0 then
+    return nil, util.trim(output) ~= '' and util.trim(output) or 'git ls-files failed'
+  end
+
+  if output == '' then
+    return {}
+  end
+
+  return vim.split(output, '\n', { plain = true, trimempty = true })
+end
+
 function M.delete_ref_sync(repo_root, ref_name)
   vim.fn.system({
     'git',

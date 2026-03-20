@@ -6,13 +6,7 @@ local M = {}
 local registered = false
 
 local function request_prompt()
-  vim.ui.input({ prompt = 'Sift prompt: ' }, function(input)
-    if input == nil then
-      return
-    end
-
-    session.prompt(input)
-  end)
+  session.focus_prompt()
 end
 
 function M.setup()
@@ -40,13 +34,13 @@ function M.setup()
 
     session.prompt(text)
   end, {
-    desc = 'Send a prompt to the current sift session',
+    desc = 'Send a prompt or focus the sift panel prompt',
     nargs = '*',
   })
 
   vim.api.nvim_create_user_command('SiftPanelToggle', function()
     session.toggle_panel()
-  end, { desc = 'Toggle the sift panel' })
+  end, { desc = 'Toggle the sift panel, starting a session if needed' })
 
   vim.api.nvim_create_user_command('SiftAcceptHunk', function()
     session.accept_hunk()

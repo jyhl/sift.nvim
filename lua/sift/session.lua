@@ -1,7 +1,9 @@
 local backend = require('sift.backend')
+local config = require('sift.config')
 local fs = require('sift.fs')
 local git = require('sift.git')
 local log = require('sift.log')
+local prompt_refs = require('sift.prompt')
 local repo = require('sift.repo')
 local review = require('sift.review')
 local state = require('sift.state')
@@ -11,6 +13,7 @@ local util = require('sift.util')
 local M = {}
 local augroup = vim.api.nvim_create_augroup('SiftSession', { clear = true })
 local setup_done = false
+local spinner_frames = { '|', '/', '-', '\\' }
 
 local function current_session(callback)
   repo.current_root(function(err, repo_root)
@@ -34,6 +37,48 @@ end
 
 local function set_status(session, status)
   session.status = status
+  ui_panel.render(session)
+end
+
+local function stop_spinner(session)
+  if session.spinner_timer then
+    session.spinner_timer:stop()
+    session.spinner_timer:close()
+    session.spinner_timer = nil
+  end
+end
+
+local function set_activity(session, activity, opts)
+  opts = opts or {}
+  session.activity_base = activity
+
+  if opts.spinning then
+    session.spinner_frame = session.spinner_frame or 1
+    session.activity = string.format('%s %s', spinner_frames[session.spinner_frame], activity)
+
+    if not session.spinner_timer then
+      local timer = vim.loop.new_timer()
+      session.spinner_timer = timer
+      timer:start(
+        120,
+        120,
+        vim.schedule_wrap(function()
+          if session.spinner_timer ~= timer then
+            return
+          end
+
+          session.spinner_frame = (session.spinner_frame % #spinner_frames) + 1
+          session.activity = string.format('%s %s', spinner_frames[session.spinner_frame], session.activity_base or '')
+          ui_panel.render(session)
+        end)
+      )
+    end
+  else
+    stop_spinner(session)
+    session.spinner_frame = 1
+    session.activity = activity
+  end
+
   ui_panel.render(session)
 end
 
@@ -74,13 +119,36 @@ local function ensure_ready(session, callback)
 end
 
 local function refresh_review(session, callback)
+  set_activity(session, 'refreshing review state', { spinning = true })
   set_refreshing(session, true)
 
   review.refresh(session, function(err, review_state)
     set_refreshing(session, false)
 
+    if err then
+      set_activity(session, 'review refresh failed')
+    else
+      set_activity(session, 'ready for prompt')
+    end
+
     if callback then
       callback(err, review_state)
+    end
+  end)
+end
+
+local function prime_tracked_files(session, callback)
+  if session.tracked_files_loaded then
+    util.schedule(callback, nil, session.tracked_files or {})
+    return
+  end
+
+  git.tracked_files(session.repo_root, function(err, files)
+    session.tracked_files_loaded = true
+    session.tracked_files = files or {}
+
+    if callback then
+      callback(err, session.tracked_files)
     end
   end)
 end
@@ -91,15 +159,15 @@ local function event_summary(event)
   end
 
   if event.type == 'thread.started' and event.thread_id then
-    return 'thread started: ' .. event.thread_id, 'info'
+    return 'connected to Codex thread ' .. event.thread_id, 'info'
   end
 
   if event.type == 'turn.started' then
-    return 'turn started', 'info'
+    return 'Codex started working on the prompt', 'info'
   end
 
   if event.type == 'turn.completed' then
-    return 'turn completed', 'info'
+    return 'Codex completed the prompt', 'info'
   end
 
   if event.type == 'error' and event.message then
@@ -114,8 +182,16 @@ local function event_summary(event)
     return event.item.message, 'error'
   end
 
+  if event.item and event.item.type == 'tool_call' and event.item.name then
+    return 'tool call: ' .. event.item.name, 'backend'
+  end
+
+  if event.item and event.item.type == 'reasoning' then
+    return 'Codex is reasoning', 'assistant'
+  end
+
   if event.item and event.item.type == 'message' and event.item.role then
-    return '[' .. event.item.role .. ' message]', 'assistant'
+    return event.item.role == 'assistant' and 'assistant response' or ('[' .. event.item.role .. ' message]'), 'assistant'
   end
 
   if event.message then
@@ -123,13 +199,141 @@ local function event_summary(event)
   end
 
   if event.delta then
-    return event.delta, 'assistant'
+    return nil, 'assistant'
   end
 
-  return '[' .. (event.type or 'event') .. ']', 'backend'
+  return nil, 'backend'
 end
 
-function M.start(callback)
+local function event_activity(event)
+  if type(event) ~= 'table' then
+    return nil
+  end
+
+  if event.type == 'thread.started' then
+    return 'connected to Codex'
+  end
+
+  if event.type == 'turn.started' then
+    return 'Codex is working'
+  end
+
+  if event.type == 'turn.completed' then
+    return 'Codex completed the turn'
+  end
+
+  if event.type == 'turn.failed' or event.type == 'error' then
+    return 'Codex reported an error'
+  end
+
+  if event.item and event.item.type == 'message' and event.item.role == 'assistant' then
+    return 'Codex sent a message'
+  end
+
+  if event.delta then
+    return 'Codex is streaming output'
+  end
+
+  return nil
+end
+
+local function ensure_session_bindings(session)
+  if type(session.submit_prompt) ~= 'function' then
+    session.submit_prompt = function(text)
+      M.prompt(text, function(prompt_err)
+        if prompt_err then
+          return
+        end
+
+        ui_panel.focus_prompt(session)
+      end)
+    end
+  end
+
+  if type(session.panel_next_hunk) ~= 'function' then
+    session.panel_next_hunk = function()
+      M.next_hunk()
+    end
+  end
+
+  if type(session.panel_prev_hunk) ~= 'function' then
+    session.panel_prev_hunk = function()
+      M.prev_hunk()
+    end
+  end
+
+  if type(session.panel_refresh) ~= 'function' then
+    session.panel_refresh = function()
+      M.refresh()
+    end
+  end
+
+  if type(session.panel_open_file) ~= 'function' then
+    session.panel_open_file = function(path)
+      return review.open_file(session, path)
+    end
+  end
+
+  if type(session.panel_jump_hunk) ~= 'function' then
+    session.panel_jump_hunk = function(hunk_id)
+      return review.jump_to_hunk_id(session, hunk_id)
+    end
+  end
+
+  if type(session.panel_accept_all) ~= 'function' then
+    session.panel_accept_all = function()
+      M.accept_all()
+    end
+  end
+
+  if type(session.panel_reject_all) ~= 'function' then
+    session.panel_reject_all = function()
+      M.reject_all()
+    end
+  end
+end
+
+local function reference_payload(text, expanded_prompt)
+  local prompt_lines = util.lines(text)
+  local expanded_lines = util.lines(expanded_prompt)
+  local start = #prompt_lines + 2
+
+  if start > #expanded_lines then
+    return ''
+  end
+
+  return table.concat(vim.list_slice(expanded_lines, start, #expanded_lines), '\n')
+end
+
+local function summarize_review_files(review_state)
+  if not review_state or not review_state.file_list then
+    return 'no pending file changes after this run'
+  end
+
+  if review_state.counts.files == 0 then
+    return 'no pending file changes after this run'
+  end
+
+  local paths = {}
+
+  for index, file in ipairs(review_state.file_list) do
+    if index > 5 then
+      break
+    end
+
+    table.insert(paths, file.path)
+  end
+
+  local suffix = ''
+
+  if review_state.counts.files > #paths then
+    suffix = string.format(' (+%d more)', review_state.counts.files - #paths)
+  end
+
+  return 'pending files after this run: ' .. table.concat(paths, ', ') .. suffix
+end
+
+local function start_session(callback)
   repo.current_root(function(err, repo_root)
     if err then
       log.error(err)
@@ -146,7 +350,9 @@ function M.start(callback)
     local existing = state.get_session(repo_root)
 
     if existing then
+      ensure_session_bindings(existing)
       ui_panel.open(existing)
+      set_activity(existing, existing.activity or 'ready for prompt')
       log.info('sift session already active for this repository')
 
       if callback then
@@ -163,11 +369,15 @@ function M.start(callback)
       baseline_commit = nil,
       run = nil,
       status = 'starting',
+      activity = 'creating baseline ref',
+      tracked_files = {},
+      tracked_files_loaded = false,
       transcript = {},
     }
 
+    ensure_session_bindings(session)
     state.set_session(repo_root, session)
-    ui_panel.open(session)
+    ui_panel.open(session, { focus_prompt = false })
     ui_panel.append_entry(session, 'system', 'creating baseline ref...')
 
     git.create_baseline(repo_root, session.id, function(create_err, baseline)
@@ -175,6 +385,7 @@ function M.start(callback)
         state.remove_session(repo_root)
         ui_panel.append_entry(session, 'error', create_err)
         set_status(session, 'error')
+        set_activity(session, 'failed to create baseline')
         log.error(create_err)
 
         if callback then
@@ -191,17 +402,32 @@ function M.start(callback)
         'system',
         string.format('baseline ready: %s -> %s', session.baseline_ref, session.baseline_commit)
       )
-      refresh_review(session, function(refresh_err)
-        if refresh_err then
-          log.warn(refresh_err)
+      set_activity(session, 'loading tracked files', { spinning = true })
+
+      prime_tracked_files(session, function(files_err)
+        if files_err then
+          ui_panel.append_entry(session, 'error', files_err)
+          log.warn(files_err)
         end
 
-        if callback then
-          callback(refresh_err, session)
-        end
+        refresh_review(session, function(refresh_err, review_state)
+          if refresh_err then
+            log.warn(refresh_err)
+          else
+            ui_panel.append_entry(session, 'system', summarize_review_files(review_state))
+          end
+
+          if callback then
+            callback(refresh_err, session)
+          end
+        end)
       end)
     end)
   end)
+end
+
+function M.start(callback)
+  start_session(callback)
 end
 
 function M.stop(callback)
@@ -220,6 +446,7 @@ function M.stop(callback)
       session.closing = true
       vim.fn.jobstop(session.run.job_id)
       session.run = nil
+      stop_spinner(session)
       ui_panel.append_entry(session, 'system', 'stopped active Codex job')
     end
 
@@ -257,6 +484,25 @@ end
 function M.toggle_panel(callback)
   current_session(function(err, session)
     if err then
+      if config.get().panel.auto_start then
+        start_session(function(start_err, started_session)
+          if start_err then
+            if callback then
+              callback(start_err)
+            end
+
+            return
+          end
+
+          ui_panel.focus_prompt(started_session)
+
+          if callback then
+            callback(nil, started_session)
+          end
+        end)
+        return
+      end
+
       log.error(err)
 
       if callback then
@@ -266,7 +512,52 @@ function M.toggle_panel(callback)
       return
     end
 
-    ui_panel.toggle(session)
+    ensure_session_bindings(session)
+    if session.panel and session.panel.winid and vim.api.nvim_win_is_valid(session.panel.winid) then
+      ui_panel.close(session)
+    else
+      ui_panel.focus_prompt(session)
+    end
+
+    if callback then
+      callback(nil, session)
+    end
+  end)
+end
+
+function M.focus_prompt(callback)
+  current_session(function(err, session)
+    if err then
+      if config.get().panel.auto_start then
+        start_session(function(start_err, started_session)
+          if start_err then
+            if callback then
+              callback(start_err)
+            end
+
+            return
+          end
+
+          ui_panel.focus_prompt(started_session)
+
+          if callback then
+            callback(nil, started_session)
+          end
+        end)
+        return
+      end
+
+      log.error(err)
+
+      if callback then
+        callback(err)
+      end
+
+      return
+    end
+
+    ensure_session_bindings(session)
+    ui_panel.focus_prompt(session)
 
     if callback then
       callback(nil, session)
@@ -302,6 +593,7 @@ function M.prompt(prompt_text, callback)
       return
     end
 
+    ensure_session_bindings(session)
     local text = util.trim(prompt_text)
 
     if text == '' then
@@ -316,13 +608,35 @@ function M.prompt(prompt_text, callback)
       return
     end
 
+    local expanded_prompt, referenced_files, expand_err = prompt_refs.expand(session, text)
+
+    if not expanded_prompt then
+      ui_panel.append_entry(session, 'error', expand_err)
+      log.warn(expand_err)
+
+      if callback then
+        callback(expand_err)
+      end
+
+      return
+    end
+
     ui_panel.open(session)
     ui_panel.append_entry(session, 'user', text)
+    if not vim.tbl_isempty(referenced_files) then
+      ui_panel.append_references(session, referenced_files, reference_payload(text, expanded_prompt))
+    end
     set_status(session, 'running')
+    set_activity(session, 'sending prompt to Codex', { spinning = true })
 
-    local job_id, start_err = backend.start(session, text, {
+    local job_id, start_err = backend.start(session, expanded_prompt, {
       on_event = function(event)
         local message, kind = event_summary(event)
+        local activity = event_activity(event)
+
+        if activity then
+          set_activity(session, activity, { spinning = true })
+        end
 
         if message and util.trim(message) ~= '' then
           ui_panel.append_entry(session, kind, message)
@@ -330,11 +644,13 @@ function M.prompt(prompt_text, callback)
       end,
       on_stdout_line = function(line)
         if util.trim(line) ~= '' then
+          set_activity(session, 'Codex produced backend output', { spinning = true })
           ui_panel.append_entry(session, 'backend', line)
         end
       end,
       on_stderr_line = function(line)
         if util.trim(line) ~= '' then
+          set_activity(session, 'Codex produced stderr output', { spinning = true })
           ui_panel.append_entry(session, 'error', line)
         end
       end,
@@ -352,8 +668,10 @@ function M.prompt(prompt_text, callback)
         end
 
         if exit_code == 0 then
+          set_activity(session, 'refreshing workspace changes', { spinning = true })
           ui_panel.append_entry(session, 'system', 'Codex run completed')
         else
+          set_activity(session, 'Codex run failed')
           ui_panel.append_entry(session, 'error', run_err)
         end
 
@@ -372,6 +690,7 @@ function M.prompt(prompt_text, callback)
     if not job_id then
       session.run = nil
       set_status(session, 'idle')
+      set_activity(session, 'failed to start Codex')
       ui_panel.append_entry(session, 'error', start_err)
       log.error(start_err)
 
@@ -642,6 +961,8 @@ local function cleanup_for_exit()
       vim.fn.jobstop(session.run.job_id)
       session.run = nil
     end
+
+    stop_spinner(session)
 
     if session.baseline_ref then
       git.delete_ref_sync(session.repo_root, session.baseline_ref)

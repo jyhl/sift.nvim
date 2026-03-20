@@ -204,6 +204,20 @@ local function jump_to_hunk(session, hunk)
   end)
 end
 
+local function open_file(session, relative_path)
+  local file = tracker.get(session).files[relative_path]
+
+  if not file then
+    return nil, 'no pending review file at cursor'
+  end
+
+  vim.cmd('edit ' .. vim.fn.fnameescape(file.absolute_path))
+  render_buffer(session, vim.api.nvim_get_current_buf())
+  apply_gitsigns_base(session, vim.api.nvim_get_current_buf(), session.baseline_ref)
+
+  return file
+end
+
 function M.setup()
   if setup_done then
     return
@@ -271,6 +285,30 @@ end
 function M.prev_hunk(session)
   local target = tracker.navigate(session, 'prev', vim.api.nvim_get_current_buf(), vim.api.nvim_win_get_cursor(0)[1])
   jump_to_hunk(session, target)
+end
+
+function M.open_file(session, relative_path)
+  return open_file(session, relative_path)
+end
+
+function M.jump_to_hunk(session, hunk)
+  if not hunk then
+    return nil, 'no pending hunk at cursor'
+  end
+
+  jump_to_hunk(session, hunk)
+  return hunk
+end
+
+function M.jump_to_hunk_id(session, hunk_id)
+  local hunk = tracker.get(session).hunks[hunk_id]
+
+  if not hunk then
+    return nil, 'no pending hunk at cursor'
+  end
+
+  jump_to_hunk(session, hunk)
+  return hunk
 end
 
 function M.accept_hunk(session)
