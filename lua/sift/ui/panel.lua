@@ -216,6 +216,22 @@ local function append_prompt_newline(session)
   M.focus_prompt(session)
 end
 
+local function action_error_message(err)
+  if err == nil then
+    return 'panel action failed'
+  end
+
+  if type(err) == 'string' then
+    return err
+  end
+
+  if type(err) == 'table' and err.message then
+    return err.message
+  end
+
+  return tostring(err)
+end
+
 local function attach_mappings(session, bufnr)
   vim.keymap.set('n', 'q', function()
     M.close(session)
@@ -486,7 +502,7 @@ local function render_lines(session)
     'baseline: ' .. (session.baseline_ref or 'pending'),
     string.format('pending: %d files, %d hunks', review.counts.files, review.counts.hunks),
     '',
-    'Prompt: use @path refs, <Tab> completes, <S-CR> newline, <CR> sends, za toggles refs, q closes',
+    'Prompt: use @path refs, <Tab> completes, <S-CR> newline, <CR>/gf jump, q closes',
     '',
   }
   local actions = {}
@@ -802,30 +818,72 @@ function M.jump_at_cursor(session)
     return false
   end
 
-  panel.source_winid = target_win
-  vim.api.nvim_set_current_win(target_win)
+  local panel_win = panel.winid
+  local current_win = vim.api.nvim_get_current_win()
+  local function run_in_target(fn)
+    panel.source_winid = target_win
+    vim.api.nvim_set_current_win(target_win)
+
+    local ok, result, err = pcall(fn)
+    local succeeded = ok and result ~= nil and result ~= false
+
+    if succeeded then
+      return true
+    end
+
+    if panel_win and vim.api.nvim_win_is_valid(panel_win) then
+      vim.api.nvim_set_current_win(panel_win)
+    elseif current_win and vim.api.nvim_win_is_valid(current_win) then
+      vim.api.nvim_set_current_win(current_win)
+    end
+
+    local message = not ok and action_error_message(result) or action_error_message(err)
+    if message ~= '' then
+      M.append_entry(session, 'error', message)
+    end
+
+    return false
+  end
 
   if action.kind == 'open_file' and action.path then
-    vim.cmd('edit ' .. vim.fn.fnameescape(session.repo_root .. '/' .. action.path))
-    return true
+    return run_in_target(function()
+      local ok, err = pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(session.repo_root .. '/' .. action.path))
+
+      if not ok then
+        return nil, err
+      end
+
+      return true
+    end)
   end
 
   if action.kind == 'open_review_file' and action.path then
     local open_review_file = session.panel_open_file
 
     if type(open_review_file) == 'function' then
-      return open_review_file(action.path) ~= nil
+      return run_in_target(function()
+        return open_review_file(action.path)
+      end)
     end
 
-    vim.cmd('edit ' .. vim.fn.fnameescape(session.repo_root .. '/' .. action.path))
-    return true
+    return run_in_target(function()
+      local ok, err = pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(session.repo_root .. '/' .. action.path))
+
+      if not ok then
+        return nil, err
+      end
+
+      return true
+    end)
   end
 
   if action.kind == 'jump_review_hunk' and action.hunk_id then
     local jump_review_hunk = session.panel_jump_hunk
 
     if type(jump_review_hunk) == 'function' then
-      return jump_review_hunk(action.hunk_id) ~= nil
+      return run_in_target(function()
+        return jump_review_hunk(action.hunk_id)
+      end)
     end
   end
 

@@ -188,11 +188,17 @@ end
 
 local function jump_to_hunk(session, hunk)
   if not hunk then
-    log.info('no pending hunks')
-    return
+    local err = 'no pending hunks'
+    log.info(err)
+    return nil, err
   end
 
-  vim.cmd('edit ' .. vim.fn.fnameescape(hunk.absolute_path))
+  local ok, edit_err = pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(hunk.absolute_path))
+
+  if not ok then
+    return nil, edit_err
+  end
+
   vim.api.nvim_win_set_cursor(0, { hunk_util.anchor(hunk), 0 })
   vim.cmd('silent! foldopen!')
   render_buffer(session, vim.api.nvim_get_current_buf())
@@ -202,6 +208,8 @@ local function jump_to_hunk(session, hunk)
       gs.preview_hunk_inline()
     end
   end)
+
+  return hunk
 end
 
 local function open_file(session, relative_path)
@@ -211,7 +219,12 @@ local function open_file(session, relative_path)
     return nil, 'no pending review file at cursor'
   end
 
-  vim.cmd('edit ' .. vim.fn.fnameescape(file.absolute_path))
+  local ok, edit_err = pcall(vim.cmd, 'edit ' .. vim.fn.fnameescape(file.absolute_path))
+
+  if not ok then
+    return nil, edit_err
+  end
+
   render_buffer(session, vim.api.nvim_get_current_buf())
   apply_gitsigns_base(session, vim.api.nvim_get_current_buf(), session.baseline_ref)
 
@@ -279,12 +292,20 @@ end
 
 function M.next_hunk(session)
   local target = tracker.navigate(session, 'next', vim.api.nvim_get_current_buf(), vim.api.nvim_win_get_cursor(0)[1])
-  jump_to_hunk(session, target)
+  local _, err = jump_to_hunk(session, target)
+
+  if err then
+    log.warn(err)
+  end
 end
 
 function M.prev_hunk(session)
   local target = tracker.navigate(session, 'prev', vim.api.nvim_get_current_buf(), vim.api.nvim_win_get_cursor(0)[1])
-  jump_to_hunk(session, target)
+  local _, err = jump_to_hunk(session, target)
+
+  if err then
+    log.warn(err)
+  end
 end
 
 function M.open_file(session, relative_path)
@@ -292,12 +313,7 @@ function M.open_file(session, relative_path)
 end
 
 function M.jump_to_hunk(session, hunk)
-  if not hunk then
-    return nil, 'no pending hunk at cursor'
-  end
-
-  jump_to_hunk(session, hunk)
-  return hunk
+  return jump_to_hunk(session, hunk)
 end
 
 function M.jump_to_hunk_id(session, hunk_id)
@@ -307,8 +323,7 @@ function M.jump_to_hunk_id(session, hunk_id)
     return nil, 'no pending hunk at cursor'
   end
 
-  jump_to_hunk(session, hunk)
-  return hunk
+  return jump_to_hunk(session, hunk)
 end
 
 function M.accept_hunk(session)

@@ -510,6 +510,59 @@ describe('sift.nvim', function()
     assert.are.equal(hunk_util.anchor(target_hunk), vim.api.nvim_win_get_cursor(0)[1])
   end)
 
+  it('keeps focus in the panel and reports an error when a jump action fails', function()
+    local session, tmpdir = create_repo()
+    current_session = session
+    current_tmpdir = tmpdir
+
+    local notes = tmpdir .. '/notes.txt'
+    local other = tmpdir .. '/other.txt'
+
+    write_lines(notes, {
+      'line 1',
+      'LINE 2',
+      'line 3',
+      'line 4',
+      'line 5',
+      'line 6',
+      'line 7',
+      'line 8',
+      'line 9',
+      'line 10',
+      'line 11',
+      'line 12',
+    })
+    write_lines(other, {
+      'alpha',
+      'BETA',
+      'gamma',
+      'delta',
+    })
+
+    refresh(session)
+
+    vim.cmd('edit ' .. vim.fn.fnameescape(notes))
+    ui_panel.open(session, { focus_prompt = false })
+    session.panel_open_file = function()
+      return nil, 'panel jump failed'
+    end
+
+    local other_lnum = nil
+    for index, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+      if line == '  other.txt (1 hunk)' then
+        other_lnum = index
+        break
+      end
+    end
+
+    assert.is_not_nil(other_lnum)
+    vim.api.nvim_win_set_cursor(0, { other_lnum, 0 })
+    assert.is_false(ui_panel.jump_at_cursor(session))
+    assert.are.equal('sift://panel/' .. session.id, vim.api.nvim_buf_get_name(0))
+    assert.are.equal('error', session.transcript[#session.transcript].kind)
+    assert.are.equal('panel jump failed', session.transcript[#session.transcript].text)
+  end)
+
   it('accepts a hunk without changing workspace text', function()
     local session, tmpdir = create_repo()
     current_session = session
