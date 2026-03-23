@@ -155,13 +155,18 @@ local function focus_prompt_cursor(session)
   local lnum = prompt_lnum(bufnr)
   local prompt_lines = split_text(prompt_text(session))
   local last_line = prompt_lines[#prompt_lines] or ''
-  local col = #prompt_line_prefix + #last_line
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  lnum = math.max(1, math.min(lnum, line_count))
+
+  local line_text = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1] or ''
+  local col = math.min(#prompt_line_prefix + #last_line, #line_text)
 
   vim.api.nvim_set_current_win(panel.winid)
-  vim.api.nvim_win_set_cursor(panel.winid, { lnum, col })
+  pcall(vim.api.nvim_win_set_cursor, panel.winid, { lnum, col })
 end
 
-local function complete_reference(session)
+local function complete_reference(session, opts)
+  opts = opts or {}
   local panel = ensure_panel_table(session)
 
   if not panel.winid or not vim.api.nvim_win_is_valid(panel.winid) then
@@ -179,7 +184,9 @@ local function complete_reference(session)
   local matches, err = prompt.complete_paths(session, ref.fragment)
 
   if not matches then
-    M.append_entry(session, 'error', err)
+    if not opts.silent_errors then
+      M.append_entry(session, 'error', err)
+    end
     return true
   end
 
@@ -194,6 +201,16 @@ local function complete_reference(session)
       word = '@' .. path,
       menu = 'sift',
     })
+  end
+
+  panel.last_completion = {
+    fragment = ref.fragment,
+    cursor = cursor[1] .. ':' .. cursor[2],
+  }
+
+  local mode = vim.api.nvim_get_mode().mode
+  if mode:sub(1, 1) ~= 'i' then
+    return true
   end
 
   vim.fn.complete(ref.startcol, items)
@@ -214,6 +231,30 @@ local function append_prompt_newline(session)
   end
 
   M.focus_prompt(session)
+end
+
+local function maybe_complete_reference(session)
+  local panel = ensure_panel_table(session)
+
+  if not panel.bufnr or vim.api.nvim_get_current_buf() ~= panel.bufnr then
+    return
+  end
+
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local line = vim.api.nvim_get_current_line()
+  local ref = prompt.reference_fragment(line, cursor[2])
+
+  if not ref then
+    panel.last_completion = nil
+    return
+  end
+
+  local cursor_key = cursor[1] .. ':' .. cursor[2]
+  if panel.last_completion and panel.last_completion.fragment == ref.fragment and panel.last_completion.cursor == cursor_key then
+    return
+  end
+
+  complete_reference(session, { silent_errors = true })
 end
 
 local function action_error_message(err)
@@ -329,10 +370,27 @@ local function ensure_buffer(session)
   vim.api.nvim_buf_set_var(bufnr, 'sift_session_repo_root', session.repo_root)
   attach_mappings(session, bufnr)
 
-  vim.api.nvim_create_autocmd({ 'TextChangedI', 'TextChanged', 'BufLeave' }, {
+  vim.api.nvim_create_autocmd({ 'TextChanged', 'BufLeave' }, {
     buffer = bufnr,
     callback = function()
       sync_prompt_from_buffer(session)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd('TextChangedI', {
+    buffer = bufnr,
+    callback = function()
+      sync_prompt_from_buffer(session)
+
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(bufnr) then
+          return
+        end
+
+        if vim.api.nvim_get_current_buf() == bufnr then
+          maybe_complete_reference(session)
+        end
+      end)
     end,
   })
 
@@ -678,7 +736,13 @@ function M.open(session, opts)
   vim.wo[panel.winid].signcolumn = 'no'
   vim.wo[panel.winid].winfixheight = panel_config.position == 'bottom'
   vim.wo[panel.winid].winfixwidth = panel_config.position ~= 'bottom'
-  vim.wo[panel.winid].wrap = false
+  vim.wo[panel.winid].wrap = true
+  vim.wo[panel.winid].linebreak = true
+  vim.wo[panel.winid].breakindent = true
+  pcall(vim.api.nvim_set_option_value, 'completeopt', 'menu,menuone,noselect,popup', {
+    scope = 'local',
+    win = panel.winid,
+  })
 
   M.render(session)
 

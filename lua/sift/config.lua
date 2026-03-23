@@ -17,6 +17,9 @@ local defaults = {
     position = 'right',
     width = 50,
   },
+  keymaps = {
+    panel_toggle = '<leader>st',
+  },
   logging = {
     notify = false,
     level = vim.log.levels.INFO,

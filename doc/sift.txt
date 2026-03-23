@@ -122,6 +122,9 @@ Default options: >
       position = 'right',
       width = 50,
     },
+    keymaps = {
+      panel_toggle = '<leader>st',
+    },
     logging = {
       notify = false,
       level = vim.log.levels.INFO,
@@ -139,11 +142,15 @@ Workflow: >
 
 Notes: >
   The panel opens in a right-side split by default.
+  The panel wraps long lines by default.
+  By default, <leader>st opens the panel and starts a session if needed.
+  Set keymaps.panel_toggle = false to disable that mapping.
   Use <S-CR> in the panel to add a new prompt line.
   <C-j> is kept as a fallback when the terminal does not send Shift+Enter
   distinctly to Neovim.
   Use @path/to/file.lua in the panel prompt to reference tracked files.
-  Press <Tab> in the panel prompt to complete @file references.
+  Typing @file in the panel prompt triggers tracked-file suggestions.
+  Press <Tab> in the panel prompt to complete @file references explicitly.
   Use za on a references line to expand or collapse the payload sent to Codex.
   Use <CR> or gf on a pending file, pending hunk, or referenced file line to
   jump to it from the panel.
@@ -153,6 +160,10 @@ Notes: >
   Use gr to refresh, gA to accept all, and gR to reject all.
   The panel shows a live activity line while Codex is working and while sift
   is refreshing review state.
+  Reasoning and assistant text from Codex JSON events are shown in the panel
+  transcript when the backend provides them.
+  Inline review shows removed lines above changed regions and highlights the
+  current working-tree lines in green.
   gitsigns.nvim is recommended, but optional.
   Without gitsigns.nvim, sift still tracks pending review state and renders
   plugin-owned signs/highlights, but inline diff preview integration is

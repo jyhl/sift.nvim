@@ -73,6 +73,9 @@ require("sift").setup({
     position = "right",
     width = 50,
   },
+  keymaps = {
+    panel_toggle = "<leader>st",
+  },
   logging = {
     notify = false,
     level = vim.log.levels.INFO,
@@ -82,7 +85,7 @@ require("sift").setup({
 
 By default, sift logs to its panel and keeps `vim.notify()` quiet. Set `logging.notify = true` if you want notifications for warnings and errors.
 
-The panel opens in a right-side vertical split by default. `:SiftPanelToggle` opens the panel and starts a session automatically when `panel.auto_start = true`.
+The panel opens in a right-side vertical split by default, wraps long lines, and `:SiftPanelToggle` opens the panel and starts a session automatically when `panel.auto_start = true`.
 
 ## Commands
 
@@ -102,9 +105,9 @@ The panel opens in a right-side vertical split by default. `:SiftPanelToggle` op
 
 ## Suggested Keymaps
 
-`sift.nvim` does not define global keymaps by default. That is intentional: many Neovim setups already use `<leader>s` for search or substitute workflows.
+By default, `sift.nvim` defines one global keymap: `<leader>st` opens the panel and starts a session if needed. You can disable or change it with `setup({ keymaps = { panel_toggle = false } })` or by setting a different left-hand side.
 
-If you want a Zed-like review flow, this is a good starting point:
+If you want a fuller Zed-like review flow, this is a good starting point:
 
 ```lua
 vim.keymap.set("n", "<leader>ss", "<cmd>SiftStart<cr>", { desc = "Sift start" })
@@ -130,7 +133,8 @@ Inside the sift panel:
 - `<CR>` sends the current prompt, or opens the pending file / pending hunk / referenced file under the cursor
 - `<S-CR>` adds a new line to the prompt composer
 - `<C-j>` is kept as a fallback when the terminal does not send a distinct `Shift+Enter`
-- `<Tab>` completes `@file` references
+- typing `@file` triggers tracked-file suggestions automatically
+- `<Tab>` completes `@file` references explicitly
 - `za` toggles referenced-file payloads in the transcript
 - `gf` opens the pending file / pending hunk / referenced file under the cursor
 - `]s` / `[s` jump to the next or previous pending hunk
@@ -152,7 +156,7 @@ Inside the sift panel:
 
 `Accept` keeps the current workspace text and removes the change from sift's pending-review UI. `Reject` restores text from the session baseline and then refreshes the review state.
 
-The panel also shows a live activity line while Codex is starting, working, streaming output, and refreshing review state after a run. Runs are grouped in the transcript, referenced-file payloads are collapsed by default, and the panel includes a pending-review section that lets you jump directly to changed files and hunks while keeping the panel pinned on the right. The panel also shows a short "pending files after this run" summary after each completed Codex turn.
+The panel also shows a live activity line while Codex is starting, working, streaming output, and refreshing review state after a run. Runs are grouped in the transcript, referenced-file payloads are collapsed by default, and the panel includes a pending-review section that lets you jump directly to changed files and hunks while keeping the panel pinned on the right. Reasoning and assistant text from Codex JSON events are surfaced in the transcript when available, and the inline review UI now shows removed lines above changed regions while highlighting the current working-tree lines in green.
 
 ## MVP limits
 

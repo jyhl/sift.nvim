@@ -1,15 +1,49 @@
+local config = require('sift.config')
 local session = require('sift.session')
 local util = require('sift.util')
 
 local M = {}
 
 local registered = false
+local panel_toggle_lhs = nil
 
 local function request_prompt()
   session.focus_prompt()
 end
 
+local function expand_lhs(lhs)
+  return vim.api.nvim_replace_termcodes(lhs, true, false, true)
+end
+
+local function setup_keymaps()
+  local lhs = config.get().keymaps and config.get().keymaps.panel_toggle or nil
+  local expanded_lhs = lhs and lhs ~= '' and expand_lhs(lhs) or nil
+
+  if panel_toggle_lhs and panel_toggle_lhs ~= expanded_lhs then
+    pcall(vim.keymap.del, 'n', panel_toggle_lhs)
+    panel_toggle_lhs = nil
+  end
+
+  if not expanded_lhs then
+    return
+  end
+
+  if panel_toggle_lhs == expanded_lhs then
+    return
+  end
+
+  vim.keymap.set('n', lhs, function()
+    session.toggle_panel()
+  end, {
+    desc = 'Sift panel',
+    silent = true,
+  })
+  panel_toggle_lhs = expanded_lhs
+end
+
 function M.setup()
+  setup_keymaps()
+
   if registered then
     return
   end

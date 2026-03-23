@@ -154,6 +154,69 @@ local function prime_tracked_files(session, callback)
 end
 
 local function event_summary(event)
+  local function append_text(texts, seen, value)
+    if type(value) ~= 'string' then
+      return
+    end
+
+    local trimmed = util.trim(value)
+    if trimmed == '' or seen[trimmed] then
+      return
+    end
+
+    seen[trimmed] = true
+    table.insert(texts, trimmed)
+  end
+
+  local function collect_text(texts, seen, value)
+    local value_type = type(value)
+
+    if value_type == 'string' then
+      append_text(texts, seen, value)
+      return
+    end
+
+    if value_type ~= 'table' then
+      return
+    end
+
+    if vim.islist(value) then
+      for _, item in ipairs(value) do
+        collect_text(texts, seen, item)
+      end
+
+      return
+    end
+
+    for _, key in ipairs({
+      'summary',
+      'content',
+      'delta',
+      'text',
+      'message',
+      'output_text',
+      'reasoning',
+    }) do
+      collect_text(texts, seen, value[key])
+    end
+
+    if value.type == 'text' or value.type == 'output_text' or value.type == 'summary_text' then
+      append_text(texts, seen, value.text or value.value)
+    end
+  end
+
+  local function extract_text(value)
+    local texts = {}
+    local seen = {}
+    collect_text(texts, seen, value)
+
+    if vim.tbl_isempty(texts) then
+      return nil
+    end
+
+    return table.concat(texts, '\n')
+  end
+
   if type(event) ~= 'table' then
     return nil, 'backend'
   end
@@ -187,10 +250,17 @@ local function event_summary(event)
   end
 
   if event.item and event.item.type == 'reasoning' then
-    return 'Codex is reasoning', 'assistant'
+    local detail = extract_text(event.item.summary) or extract_text(event.summary) or extract_text(event.delta)
+    return detail or 'Codex is reasoning', 'assistant'
   end
 
   if event.item and event.item.type == 'message' and event.item.role then
+    local detail = extract_text(event.item.content) or extract_text(event.delta)
+
+    if detail then
+      return detail, 'assistant'
+    end
+
     return event.item.role == 'assistant' and 'assistant response' or ('[' .. event.item.role .. ' message]'), 'assistant'
   end
 
@@ -199,6 +269,12 @@ local function event_summary(event)
   end
 
   if event.delta then
+    local detail = extract_text(event.delta)
+
+    if detail then
+      return detail, 'assistant'
+    end
+
     return nil, 'assistant'
   end
 

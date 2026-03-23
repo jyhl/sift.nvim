@@ -313,7 +313,46 @@ describe('sift.nvim', function()
     assert.are.equal(fs.realpath(tmpdir), started.repo_root)
     assert.are.equal('sift://panel/' .. started.id, vim.api.nvim_buf_get_name(0))
     assert.are.equal(config.get().panel.width, vim.api.nvim_win_get_width(0))
+    assert.is_true(vim.wo.wrap)
     assert.is_not_nil(started.baseline_ref)
+  end)
+
+  it('maps the default panel toggle key to open the panel and start a session', function()
+    local tmpdir = create_workspace()
+    current_tmpdir = tmpdir
+    local original_leader = vim.g.mapleader
+    local sift = require('sift')
+
+    vim.g.mapleader = ' '
+    sift.setup()
+    vim.cmd('edit ' .. vim.fn.fnameescape(tmpdir .. '/notes.txt'))
+
+    local expected_lhs = vim.api.nvim_replace_termcodes(config.get().keymaps.panel_toggle, true, false, true)
+    local actual_lhs = nil
+
+    for _, map in ipairs(vim.api.nvim_get_keymap('n')) do
+      if map.desc == 'Sift panel' then
+        actual_lhs = map.lhs
+        break
+      end
+    end
+
+    assert.are.equal(expected_lhs, actual_lhs)
+    sift.panel_toggle()
+
+    wait_for(function()
+      local session = state.get_session(fs.realpath(tmpdir))
+      return session and session.panel and session.panel.winid and vim.api.nvim_win_is_valid(session.panel.winid)
+    end, 'timed out waiting for default sift keymap to open the panel')
+
+    local started = state.get_session(fs.realpath(tmpdir))
+    current_session = started
+
+    assert.is_not_nil(started)
+    assert.are.equal('sift://panel/' .. started.id, vim.api.nvim_buf_get_name(0))
+    assert.is_not_nil(started.baseline_ref)
+
+    vim.g.mapleader = original_leader
   end)
 
   it('uses a dirty tracked file as the session baseline when starting', function()
@@ -405,6 +444,22 @@ describe('sift.nvim', function()
     ui_panel.set_prompt(session, 'first line\nsecond line')
 
     assert.are.equal('first line\nsecond line', ui_panel.get_prompt(session))
+  end)
+
+  it('triggers tracked-file completion while typing @file references in the panel', function()
+    local session, tmpdir = create_repo()
+    current_session = session
+    current_tmpdir = tmpdir
+
+    ui_panel.set_prompt(session, '@not')
+    ui_panel.focus_prompt(session)
+    vim.api.nvim_exec_autocmds('TextChangedI', { buffer = session.panel.bufnr })
+
+    wait_for(function()
+      return session.panel
+        and session.panel.last_completion
+        and session.panel.last_completion.fragment == 'not'
+    end, 'timed out waiting for panel completion trigger')
   end)
 
   it('toggles and jumps referenced files from the panel transcript', function()
@@ -508,6 +563,55 @@ describe('sift.nvim', function()
     assert.is_true(ui_panel.jump_at_cursor(session))
     assert.are.equal(fs.realpath(notes), fs.realpath(vim.api.nvim_buf_get_name(0)))
     assert.are.equal(hunk_util.anchor(target_hunk), vim.api.nvim_win_get_cursor(0)[1])
+  end)
+
+  it('renders removed preview lines above added working-tree lines', function()
+    local session, tmpdir = create_repo()
+    current_session = session
+    current_tmpdir = tmpdir
+
+    local notes = tmpdir .. '/notes.txt'
+
+    write_lines(notes, {
+      'line 1',
+      'LINE 2',
+      'line 3',
+      'line 4',
+      'line 5',
+      'line 6',
+      'line 7',
+      'line 8',
+      'line 9',
+      'line 10',
+      'line 11',
+      'line 12',
+    })
+
+    vim.cmd('edit ' .. vim.fn.fnameescape(notes))
+    refresh(session)
+
+    local extmarks = vim.api.nvim_buf_get_extmarks(0, state.namespaces.inline, 0, -1, { details = true })
+    local saw_removed_preview = false
+    local saw_added_highlight = false
+
+    for _, extmark in ipairs(extmarks) do
+      local details = extmark[4] or {}
+
+      if details.line_hl_group == 'DiffAdd' then
+        saw_added_highlight = true
+      end
+
+      for _, virt_line in ipairs(details.virt_lines or {}) do
+        local chunk = virt_line[1]
+
+        if chunk and chunk[1] == '- line 2' and chunk[2] == 'DiffDelete' then
+          saw_removed_preview = true
+        end
+      end
+    end
+
+    assert.is_true(saw_removed_preview)
+    assert.is_true(saw_added_highlight)
   end)
 
   it('keeps focus in the panel and reports an error when a jump action fails', function()
@@ -1144,6 +1248,69 @@ describe('sift.nvim', function()
     assert.is_true(vim.tbl_contains(transcript_texts, 'Codex run completed'))
     assert.is_true(vim.tbl_contains(transcript_texts, 'not-json output from codex'))
     assert.is_true(vim.tbl_contains(transcript_texts, 'pending files after this run: notes.txt'))
+  end)
+
+  it('records detailed reasoning and assistant text from Codex events', function()
+    local session, tmpdir = create_repo()
+    current_session = session
+    current_tmpdir = tmpdir
+
+    local old_start = backend.start
+
+    backend.start = function(_, prompt_text, handlers)
+      assert.are.equal('walk me through the change', prompt_text)
+
+      vim.schedule(function()
+        handlers.on_event({
+          item = {
+            type = 'reasoning',
+            summary = {
+              {
+                type = 'summary_text',
+                text = 'Inspecting notes.txt before editing',
+              },
+            },
+          },
+        })
+        handlers.on_event({
+          item = {
+            type = 'message',
+            role = 'assistant',
+            content = {
+              {
+                type = 'output_text',
+                text = 'Updating the note now',
+              },
+            },
+          },
+        })
+        handlers.on_exit(0)
+      end)
+
+      return 101
+    end
+
+    vim.cmd('enew')
+    vim.cmd('cd ' .. vim.fn.fnameescape(tmpdir))
+
+    local err = await(function(done)
+      session_module.prompt('walk me through the change', function(prompt_err)
+        done(prompt_err)
+      end)
+    end)
+
+    backend.start = old_start
+
+    assert.is_nil(err)
+
+    local transcript_texts = {}
+
+    for _, entry in ipairs(session.transcript) do
+      table.insert(transcript_texts, entry.text)
+    end
+
+    assert.is_true(vim.tbl_contains(transcript_texts, 'Inspecting notes.txt before editing'))
+    assert.is_true(vim.tbl_contains(transcript_texts, 'Updating the note now'))
   end)
 
   it('submits panel prompts and expands @file references before calling Codex', function()
